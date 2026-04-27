@@ -13,14 +13,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CsvHelper" Version="33.0.1" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0-preview.5.25277.114" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\CP.Migrator.Business\CP.Migrator.Business.csproj" />
+    <ProjectReference Include="..\CP.Migrator.Data\CP.Migrator.Data.csproj" />
     <ProjectReference Include="..\CP.Migrator.Models\CP.Migrator.Models.csproj" />
   </ItemGroup>
 
-
 </Project>
-

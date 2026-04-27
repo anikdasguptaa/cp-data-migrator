@@ -20,6 +20,8 @@ internal class SQLiteConnectionFactory : IConnectionFactory
         }.ToString();
     }
 
+    public string ConnectionString => _connectionString;
+
     public IDbConnection CreateConnection()
     {
         return new SqliteConnection(_connectionString);

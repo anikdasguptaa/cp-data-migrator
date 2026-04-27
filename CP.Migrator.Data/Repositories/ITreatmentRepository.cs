@@ -1,4 +1,4 @@
-﻿using CP.Migrator.Models.Entities;
+﻿using CP.Migrator.Data.Entities;
 
 namespace CP.Migrator.Data.Repositories;
 

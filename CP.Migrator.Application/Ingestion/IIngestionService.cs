@@ -1,7 +1,7 @@
 using CP.Migrator.Models.Csv;
 using CP.Migrator.Models.Results;
 
-namespace CP.Migrator.Business.Ingestion
+namespace CP.Migrator.Application.Ingestion
 {
     /// <summary>
     /// Orchestrates the final ingestion step of the import pipeline.

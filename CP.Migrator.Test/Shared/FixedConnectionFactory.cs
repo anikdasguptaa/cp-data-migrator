@@ -18,5 +18,7 @@ internal sealed class FixedConnectionFactory : IConnectionFactory
         _connectionString = $"Data Source={dbName};Mode=Memory;Cache=Shared";
     }
 
+    public string ConnectionString => _connectionString;
+
     public IDbConnection CreateConnection() => new SqliteConnection(_connectionString);
 }

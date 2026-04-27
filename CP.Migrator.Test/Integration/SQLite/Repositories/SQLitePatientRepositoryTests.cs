@@ -1,7 +1,7 @@
 using CP.Migrator.Data;
+using CP.Migrator.Data.Entities;
 using CP.Migrator.Data.SQLite;
 using CP.Migrator.Data.SQLite.Repositories;
-using CP.Migrator.Models.Entities;
 using CP.Migrator.Test.Shared;
 using Dapper;
 using System.Data;

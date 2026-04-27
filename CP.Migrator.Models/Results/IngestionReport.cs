@@ -20,14 +20,16 @@ namespace CP.Migrator.Models.Results
     /// <summary>
     /// Summary produced at the end of a full ingestion run.
     /// Displayed in the UI and can be exported as a log.
+    /// Counts are set once by the ingestion service after the run completes;
+    /// this class is a pure data-transfer object with no behaviour of its own.
     /// </summary>
     public class IngestionReport
     {
         public int TotalRows { get; set; }
-        public int SuccessCount => Entries.Count(e => e.Status == IngestionStatus.Inserted);
-        public int SkippedCount => Entries.Count(e => e.Status == IngestionStatus.Skipped);
-        public int ErrorCount => Entries.Count(e => e.Status == IngestionStatus.Failed);
-        public int DuplicateCount => Entries.Count(e => e.Status == IngestionStatus.Duplicate);
+        public int SuccessCount { get; set; }
+        public int SkippedCount { get; set; }
+        public int ErrorCount { get; set; }
+        public int DuplicateCount { get; set; }
 
         public List<IngestionReportEntry> Entries { get; } = new List<IngestionReportEntry>();
     }

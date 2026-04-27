@@ -1,5 +1,5 @@
+using CP.Migrator.Data.Entities;
 using CP.Migrator.Data.Repositories;
-using CP.Migrator.Models.Entities;
 using Dapper;
 
 namespace CP.Migrator.Data.SQLite.Repositories;

@@ -1,13 +1,13 @@
 using CP.Migrator.Models.Csv;
 
-namespace CP.Migrator.UI.Helpers;
+namespace CP.Migrator.Models.Extensions;
 
 /// <summary>
 /// Extension methods for shallow-cloning and field-copying CSV row models.
 /// Used by the undo/redo subsystem so it can snapshot row state before
 /// and after an edit without modifying the business-layer models.
 /// </summary>
-internal static class CsvRowExtensions
+public static class CsvRowExtensions
 {
     // PatientCsvRow
 

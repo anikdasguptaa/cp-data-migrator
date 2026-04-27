@@ -2,7 +2,6 @@ using CP.Migrator.Business.AutoFix;
 using CP.Migrator.Business.Config;
 using CP.Migrator.Business.Export;
 using CP.Migrator.Business.History;
-using CP.Migrator.Business.Ingestion;
 using CP.Migrator.Business.Parser;
 using CP.Migrator.Business.Validation;
 using CP.Migrator.Models.Csv;
@@ -21,9 +20,6 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddMigratorBusiness(this IServiceCollection services)
     {
-        // --- Business services ---
-        services.AddScoped<IIngestionService, IngestionService>();
-
         // --- Parsers ---
         services.AddTransient<ICsvParserService<PatientCsvRow>, PatientCsvParser>();
         services.AddTransient<ICsvParserService<TreatmentCsvRow>, TreatmentCsvParser>();
@@ -31,6 +27,7 @@ public static class ServiceCollectionExtensions
         // --- Validation options (override via configuration if needed) ---
         services.AddSingleton<PatientValidationOptions>();
         services.AddSingleton<TreatmentValidationOptions>();
+        services.AddSingleton<CsvParserOptions>();
 
         // --- Validators ---
         services.AddTransient<IRecordValidator<PatientCsvRow>, PatientValidator>();
@@ -44,7 +41,8 @@ public static class ServiceCollectionExtensions
         services.AddTransient<IRowExportService, RowExportService>();
 
         // --- History ---
-        services.AddSingleton(typeof(IUndoRedoManager<>), typeof(UndoRedoManager<>));
+        // Scoped so the undo/redo stacks are bound to one import session
+        services.AddScoped(typeof(IUndoRedoManager<>), typeof(UndoRedoManager<>));
 
         return services;
     }
