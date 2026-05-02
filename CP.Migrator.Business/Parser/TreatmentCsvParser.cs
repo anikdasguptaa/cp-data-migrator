@@ -1,4 +1,5 @@
-﻿using CP.Migrator.Models.Csv;
+﻿using CP.Migrator.Business.Config;
+using CP.Migrator.Models.Csv;
 using CP.Migrator.Models.Results;
 using CsvHelper;
 using CsvHelper.Configuration;
@@ -13,8 +14,17 @@ namespace CP.Migrator.Business.Parser
 	/// </summary>
 	internal class TreatmentCsvParser : ICsvParserService<TreatmentCsvRow>
 	{
+		private readonly CsvParserOptions _options;
+
+		public TreatmentCsvParser(CsvParserOptions options)
+		{
+			_options = options;
+		}
+
 		public IEnumerable<ParsedRow<TreatmentCsvRow>> Parse(string filePath)
 		{
+			var fullPath = CsvParserGuard.ValidatePath(filePath, _options);
+			CsvParserGuard.ValidateFileSize(fullPath, _options);
 			var config = new CsvConfiguration(CultureInfo.InvariantCulture)
 			{
 				HasHeaderRecord = true,
@@ -23,7 +33,7 @@ namespace CP.Migrator.Business.Parser
 				TrimOptions = TrimOptions.Trim
 			};
 
-			using var reader = new StreamReader(filePath);
+			using var reader = new StreamReader(fullPath);
 			using var csv = new CsvReader(reader, config);
 
 			csv.Context.RegisterClassMap<TreatmentCsvRowMap>();
@@ -54,6 +64,10 @@ namespace CP.Migrator.Business.Parser
 
 				results.Add(parsedRow);
 				rowIndex++;
+
+				if (results.Count >= _options.MaxRowCount)
+					throw new InvalidOperationException(
+						$"CSV file exceeds the maximum row limit of {_options.MaxRowCount:N0}.");
 			}
 
 			return results;

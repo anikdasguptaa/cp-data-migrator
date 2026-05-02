@@ -1,11 +1,11 @@
 using CP.Migrator.Data;
+using CP.Migrator.Data.Entities;
 using CP.Migrator.Data.Repositories;
 using CP.Migrator.Models.Csv;
-using CP.Migrator.Models.Entities;
 using CP.Migrator.Models.Results;
 using System.Globalization;
 
-namespace CP.Migrator.Business.Ingestion
+namespace CP.Migrator.Application.Ingestion
 {
     /// <summary>
     /// Orchestrates the full ingestion pipeline for a single import session.
@@ -105,14 +105,16 @@ namespace CP.Migrator.Business.Ingestion
                 if (validTreatments.Count == 0)
                 {
                     _unitOfWork.Commit();
+					// Finalize summary stats after whatever processing is done till here
+					SetReportSummaryStats(report);
                     return report;
                 }
 
-				// ---------------------------------------------------------------
-				// Step 3: Group valid treatments by (PatientSourceId, Date)
-				//         → one Invoice per group
-				// ---------------------------------------------------------------
-				var invoiceGroups = validTreatments
+                // ---------------------------------------------------------------
+                // Step 3: Group valid treatments by (PatientSourceId, Date)
+                //         → one Invoice per group
+                // ---------------------------------------------------------------
+                var invoiceGroups = validTreatments
                     .GroupBy(t => (t.Row.RawPatientSourceId, t.Row.Date))
                     .ToList();
 
@@ -210,6 +212,8 @@ namespace CP.Migrator.Business.Ingestion
                 }
 
                 _unitOfWork.Commit();
+				// Finalize summary stats after all processing is done
+				SetReportSummaryStats(report);
             }
             catch
             {
@@ -220,11 +224,11 @@ namespace CP.Migrator.Business.Ingestion
             return report;
         }
 
-        // -----------------------------------------------------------------------
-        // Mapping helpers
-        // -----------------------------------------------------------------------
+		// -----------------------------------------------------------------------
+		// Mapping helpers
+		// -----------------------------------------------------------------------
 
-        private static Patient MapPatient(PatientCsvRow row, int clinicId) => new()
+		private static Patient MapPatient(PatientCsvRow row, int clinicId) => new()
         {
             PatientIdentifier = Guid.NewGuid().ToString(),
             PatientNo = row.RawSourceId,           // preserve original CSV ID as a reference number
@@ -303,5 +307,17 @@ namespace CP.Migrator.Business.Ingestion
             Status = IngestionStatus.Duplicate,
             Message = $"Duplicate - {message}"
         };
-    }
+
+
+		// -----------------------------------------------------------------------
+		// Other helpers
+		// -----------------------------------------------------------------------
+		private static void SetReportSummaryStats(IngestionReport report)
+		{
+			report.SuccessCount = report.Entries.Count(e => e.Status == IngestionStatus.Inserted);
+			report.SkippedCount = report.Entries.Count(e => e.Status == IngestionStatus.Skipped);
+			report.ErrorCount = report.Entries.Count(e => e.Status == IngestionStatus.Failed);
+			report.DuplicateCount = report.Entries.Count(e => e.Status == IngestionStatus.Duplicate);
+		}
+	}
 }

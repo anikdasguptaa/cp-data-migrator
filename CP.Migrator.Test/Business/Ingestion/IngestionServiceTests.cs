@@ -1,4 +1,4 @@
-using CP.Migrator.Business.Ingestion;
+using CP.Migrator.Application.Ingestion;
 using CP.Migrator.Data.SQLite;
 using CP.Migrator.Data.SQLite.Repositories;
 using CP.Migrator.Models.Csv;

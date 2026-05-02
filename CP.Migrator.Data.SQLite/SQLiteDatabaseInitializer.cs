@@ -18,11 +18,8 @@ internal class SQLiteDatabaseInitializer : IDatabaseInitializer
     /// </summary>
     public void Initialise()
     {
-        using var connection = _connectionFactory.CreateConnection();
-        var connectionString = connection.ConnectionString;
-
         var upgrader = DeployChanges.To
-            .SqliteDatabase(connectionString)
+            .SqliteDatabase(_connectionFactory.ConnectionString)
             .WithScriptsEmbeddedInAssembly(Assembly.GetExecutingAssembly(), s => s.Contains(".Migrations."))
             .WithTransactionPerScript()
             .LogToConsole()

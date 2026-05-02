@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="CP.Migrator.Application/CP.Migrator.Application.csproj" Id="6e6380a9-decb-47d4-80e8-d32de385b88f" />
   <Project Path="CP.Migrator.Business/CP.Migrator.Business.csproj" Id="ef991dbc-60e8-40fb-a2ea-419a9863bef7" />
   <Project Path="CP.Migrator.Data.SQLite/CP.Migrator.Data.SQLite.csproj" Id="d93e4a1a-cb64-48a4-aa55-cef9bb12a2b0" />
   <Project Path="CP.Migrator.Data/CP.Migrator.Data.csproj" Id="65d5cb7c-aab3-46ce-ab50-3bf2d46cccb2" />

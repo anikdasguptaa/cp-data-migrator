@@ -25,7 +25,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CP.Migrator.Data\CP.Migrator.Data.csproj" />
-    <ProjectReference Include="..\CP.Migrator.Models\CP.Migrator.Models.csproj" />
   </ItemGroup>
 
 </Project>

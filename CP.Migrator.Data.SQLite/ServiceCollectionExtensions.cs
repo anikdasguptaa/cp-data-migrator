@@ -15,7 +15,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     /// <param name="services">The DI container builder.</param>
     /// <param name="databasePath">Full path to the SQLite database file.</param>
-    public static IServiceCollection AddSQLiteData(
+    public static IServiceCollection AddMigratorSQLiteData(
         this IServiceCollection services,
         string databasePath)
     {

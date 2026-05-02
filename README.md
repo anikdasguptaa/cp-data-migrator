@@ -8,16 +8,25 @@ Many dental practices still use legacy desktop software that exports data as CSV
 
 ## Architecture
 
-The solution follows a layered architecture with clear separation of concerns:
+The solution has 7 projects with clear layer boundaries:
 
 | Project | Target | Purpose |
 |---|---|---|
-| **CP.Migrator.UI** | .NET 10 (WinForms, `net10.0-windows`) | User interface - file loading, tabbed data grids, action buttons, ingestion report dialog |
-| **CP.Migrator.Business** | .NET 10 | Business logic - parsing, validation, auto-fix, ingestion, export, undo/redo |
-| **CP.Migrator.Models** | .NET 10 | Shared models - CSV row types, database entities, result/report types |
-| **CP.Migrator.Data** | .NET 10 | Data-access abstractions - repository interfaces, unit of work, connection factory |
-| **CP.Migrator.Data.SQLite** | .NET 10 | SQLite implementation - Dapper-based repositories, DbUp schema migrations |
-| **CP.Migrator.Test** | .NET 10 | Unit and integration tests (xUnit) |
+| **CP.Migrator.UI** | .NET 10 (`net10.0-windows`) | WinForms UI only. Depends on Application facade interfaces and models. |
+| **CP.Migrator.Application** | .NET 10 | Application orchestration layer. Exposes `IMigratorPipelineService` and `IAppStartup` to the UI; `IIngestionService` is an internal coordination seam used by the pipeline. |
+| **CP.Migrator.Business** | .NET 10 | Parsing, validation, auto-fix, export, undo/redo services. |
+| **CP.Migrator.Data** | .NET 10 | Data abstractions and data entities (`IUnitOfWork`, repositories, DB entities). |
+| **CP.Migrator.Data.SQLite** | .NET 10 | SQLite implementation (Dapper repositories, DbUp migrations, unit of work). |
+| **CP.Migrator.Models** | .NET 10 | Shared CSV and result models (`CsvRow`, `ParsedRow<T>`, `ValidationError`, `IngestionReport`). |
+| **CP.Migrator.Test** | .NET 10 | Unit and integration tests (xUnit) across business/application/data layers. |
+
+### Project References
+
+- `CP.Migrator.UI` -> `CP.Migrator.Application`, `CP.Migrator.Data.SQLite`, `CP.Migrator.Models`
+- `CP.Migrator.Application` -> `CP.Migrator.Business`, `CP.Migrator.Data`, `CP.Migrator.Models`
+- `CP.Migrator.Business` -> `CP.Migrator.Models`
+- `CP.Migrator.Data.SQLite` -> `CP.Migrator.Data`
+- `CP.Migrator.Test` -> `CP.Migrator.Application`, `CP.Migrator.Business`, `CP.Migrator.Data`, `CP.Migrator.Data.SQLite`
 
 ### Key Dependencies
 
@@ -28,142 +37,166 @@ The solution follows a layered architecture with clear separation of concerns:
 | Microsoft.Data.Sqlite | 10.0.6 | CP.Migrator.Data.SQLite, CP.Migrator.Test |
 | dbup-sqlite | 6.0.4 | CP.Migrator.Data.SQLite |
 | Microsoft.Extensions.DependencyInjection | 10.0.0 | CP.Migrator.UI |
-| xUnit | 2.9.3 | CP.Migrator.Test |
+| Microsoft.Extensions.DependencyInjection.Abstractions | 10.0.0-preview.5.25277.114 | CP.Migrator.Application, CP.Migrator.Business, CP.Migrator.Data.SQLite |
+| xunit | 2.9.3 | CP.Migrator.Test |
 
 ## Import Pipeline
 
-The tool processes data through a well-defined pipeline:
-
-1. **Parse** - Load `patient.csv` and `treatment.csv` into typed row models (`PatientCsvRow` / `TreatmentCsvRow`) using CsvHelper. Each row is wrapped in a `ParsedRow<T>` that carries validation state through the rest of the pipeline.
-2. **Validate** - Run validators against each row (mandatory fields, date/email/phone/postcode formats, valid Australian states and genders, foreign-key integrity, duplicate detection). Errors and warnings are stored per row and displayed in the UI grid with color coding.
-3. **Auto-fix** *(user-triggered)* - Automatically correct common issues (trim whitespace, normalise dates to `yyyy-MM-dd`, normalise phone/mobile numbers, standardise gender and paid values). Every fix is recorded in the undo/redo stack.
-4. **Re-validate** - Validators re-run automatically after auto-fix so the grid reflects what was resolved.
-5. **Ingest** - Persist valid rows into the SQLite database within a single transaction (scoped per ingestion run):
-   - `patient.csv` -> `tblPatient` (duplicate detection by composite key: `ClinicId + PatientNo + Firstname + Lastname`)
-   - `treatment.csv` -> `tblTreatment` + `tblInvoice` + `tblInvoiceLineItem`
-   - Invoices are created by grouping treatments that share the same patient and date. Invoice totals are calculated from related line item fees.
-   - A **Clinic ID** (entered by the operator before ingestion) scopes all records for multi-clinic isolation.
-6. **Report** - An `IngestionReport` modal dialog shows per-row outcomes (Inserted / Skipped / Duplicate / Failed) and can be exported to CSV.
-7. **Post-ingestion cleanup** - Successfully ingested rows (Inserted / Duplicate) are removed from the in-memory grid. Remaining rows (still invalid) stay for further editing.
+1. **Load + Parse** - Load `patient.csv` and/or `treatment.csv`. Rows are parsed into `ParsedRow<T>` using CsvHelper-based parser services.
+2. **Initial Validate (automatic)** - Validation runs immediately after file load so users see errors right away.
+3. **Validate All (manual, optional)** - User can re-run full validation with the toolbar button after additional edits/deletes.
+4. **Auto-Fix All (user-triggered)** - Applies automatic corrections (trim, date normalization, phone/mobile normalization, gender/paid normalization), then re-validates.
+5. **Ingest** - Valid rows are ingested into SQLite in one transaction:
+   - `patient.csv` -> `tblPatient`
+   - `treatment.csv` -> grouped into invoices (one per patient + date), then inserted into `tblInvoice`, `tblTreatment`, and `tblInvoiceLineItem` in that order
+   - Patient duplicates are detected by composite key: `ClinicId + PatientNo + Firstname + Lastname`
+6. **Report** - An `IngestionReport` dialog shows row outcomes: `Inserted`, `Skipped`, `Duplicate`, `Failed`, with CSV export support.
+7. **Post-ingestion cleanup** - Inserted/duplicate patient rows are removed; valid treatment rows are removed; remaining rows stay for further correction.
 
 ## Database Schema
 
-The SQLite schema is managed by DbUp via embedded SQL migration scripts. Migration history is tracked automatically in a `SchemaVersions` table. The database file (`CorePractice.db`) is created next to the executable on first run.
+Schema is managed by DbUp via embedded SQL scripts. Migration history is tracked in `SchemaVersions`. The database file (`CorePractice.db`) is created next to the executable on first run.
 
 | Migration | Description |
 |---|---|
 | `0001_InitialSetup.sql` | Creates `tblPatient`, `tblInvoice`, `tblTreatment`, `tblInvoiceLineItem` |
-| `0002_AddClinicId.sql` | Adds `ClinicId INTEGER` to all four tables for multi-clinic data isolation |
+| `0002_AddClinicId.sql` | Adds `ClinicId INTEGER NOT NULL` to all four tables |
 
-> **SQLite type notes:** `datetime` columns are stored as ISO 8601 `TEXT`; `bit` columns are stored as `INTEGER 0/1`; `decimal(19,4)` columns are stored as `REAL` (IEEE 754 double - exact decimal precision is not guaranteed at the storage layer).
+> **SQLite type notes:** `datetime` -> ISO 8601 `TEXT`; `bit` -> `INTEGER` (0/1); `decimal(19,4)` -> `REAL` (IEEE 754 double, no exact decimal guarantee at the storage layer).
 
 ## Key Design Decisions
 
-- **CSV IDs are reference-only.** Original IDs from the CSV are stored as `PatientNo` (patient) and `RawPatientSourceId` (treatment cross-reference) but are never used as database primary keys, because CSV IDs are not guaranteed to be numeric or unique across databases.
-- **Validation is configurable.** Rules (valid Australian states, accepted genders, date formats, regex patterns for email/mobile/phone/postcode, max patient age) are driven by `PatientValidationOptions` and `TreatmentValidationOptions`, registered as singletons and overridable without code edits.
-- **Two-tier validation severity.** Each `ValidationError` carries either `Error` (blocks ingestion) or `Warning` (informational - row is still ingested) severity. Rows with only warnings are color-coded yellow in the grid.
-- **Duplicate detection.** Patients are checked by composite key (`ClinicId + PatientNo + Firstname + Lastname`) before insertion. Duplicate patients are mapped to the existing DB record so their treatments are still ingested correctly.
-- **Transactional ingestion.** All inserts within a run happen within a single database transaction - if anything fails mid-run, the entire batch is rolled back.
-- **Undo/Redo.** Manual cell edits in the UI grid and auto-fix operations are both tracked by the generic `UndoRedoManager<T>` (stack-based) so operators can step backwards and forwards before committing. History is cleared after ingestion.
-- **Invalid row export.** Operators can export invalid rows from the active tab to a CSV file for external correction and re-import.
-- **Ingestion report export.** The post-ingestion report dialog can be saved as a CSV file for audit purposes.
-- **DI-first, scoped ingestion.** The UI creates a new DI scope per ingestion run (`IServiceProvider.CreateScope()`) so each run gets a fresh `IUnitOfWork` (and therefore a fresh SQLite connection + transaction).
-- **`InternalsVisibleTo`** is configured on both `CP.Migrator.Business` and `CP.Migrator.Data.SQLite` so the test project can access internal types without making them public.
+- **Application facade in front of business/data services**: UI works through `IMigratorPipelineService` and `IAppStartup`, not directly against business/data internals.
+- **CSV IDs are reference-only**: `Id` values are stored as reference fields (`PatientNo`, `RawPatientSourceId`) and never used as DB primary keys.
+- **Data entities moved to data layer**: persistence entities (`Patient`, `Invoice`, `Treatment`, `InvoiceLineItem`) are in `CP.Migrator.Data.Entities`, while `CP.Migrator.Models` now contains CSV/result models only.
+- **Two-tier validation severity**: `ValidationError` supports `Error` (blocking) and `Warning` (non-blocking).
+- **Transactional ingestion**: all inserts for a run share one unit of work + transaction; failure rolls back the batch.
+- **Duplicate-aware patient mapping**: duplicate patient rows are mapped to existing DB patient IDs so treatment ingestion can continue.
+- **Scoped undo/redo history**: manual edits and auto-fixes are tracked per session with `UndoRedoManager<T>` and cleared after ingestion.
+- **Active-tab invalid export**: invalid rows can be exported from the selected tab.
+- **Startup abstraction**: DB initialization is hidden behind `IAppStartup` so UI startup stays decoupled from data infrastructure.
+- **Internals visible to tests**: `CP.Migrator.Business`, `CP.Migrator.Data.SQLite`, and `CP.Migrator.Application` expose internals to `CP.Migrator.Test`.
 
 ## Project Structure
 
 ```
 cp-data-migrator.slnx
-+-- CP.Migrator.UI/
-|   +-- Forms/
-|   |   +-- MainForm.cs / .Designer.cs            -> Application shell
-|   |   +-- IngestionReportForm.cs / .Designer.cs -> Post-ingestion report dialog
-|   +-- ViewModels/
-|   |   +-- IRowItem.cs
-|   |   +-- PatientRowItem.cs
-|   |   +-- TreatmentRowItem.cs
-|   +-- Helpers/
-|   |   +-- CsvRowExtensions.cs                   -> Clone/CopyTo for undo snapshots
-|   +-- Program.cs                                -> DI setup + app entry point
-+-- CP.Migrator.Business/
-|   +-- AutoFix/       -> PatientAutoFix, TreatmentAutoFix, AutoFixBase
-|   +-- Config/        -> PatientValidationOptions, TreatmentValidationOptions
-|   +-- Export/        -> RowExportService
-|   +-- History/       -> UndoRedoManager<T>
-|   +-- Ingestion/     -> IngestionService
-|   +-- Parser/        -> PatientCsvParser, TreatmentCsvParser
-|   +-- Validation/    -> PatientValidator, TreatmentValidator
-|   +-- ServiceCollectionExtensions.cs
-+-- CP.Migrator.Models/
-|   +-- Csv/           -> CsvRow (base), PatientCsvRow, TreatmentCsvRow
-|   +-- Entities/      -> Patient, Invoice, Treatment, InvoiceLineItem
-|   +-- Results/       -> ParsedRow<T>, ValidationError, IngestionReport, IngestionStatus
-+-- CP.Migrator.Data/
-|   +-- Repositories/  -> IRepository<T>, IPatientRepository, IInvoiceRepository,
-|   |                     ITreatmentRepository, IInvoiceLineItemRepository
-|   +-- IUnitOfWork.cs
-|   +-- IConnectionFactory.cs
-|   +-- IDatabaseInitializer.cs
-+-- CP.Migrator.Data.SQLite/
-|   +-- Repositories/  -> SQLitePatientRepository, SQLiteInvoiceRepository,
-|   |                     SQLiteTreatmentRepository, SQLiteInvoiceLineItemRepository
-|   +-- Migrations/
-|   |   +-- 0001_InitialSetup.sql
-|   |   +-- 0002_AddClinicId.sql
-|   +-- SQLiteConnectionFactory.cs
-|   +-- SQLiteUnitOfWork.cs
-|   +-- SQLiteDatabaseInitializer.cs
-|   +-- ServiceCollectionExtensions.cs
-+-- CP.Migrator.Test/
-   +-- Business/
-   |   +-- AutoFix/      -> PatientAutoFixTests, TreatmentAutoFixTests
-   |   +-- Export/       -> RowExportServiceTests
-   |   +-- History/      -> UndoRedoManagerTests
-   |   +-- Ingestion/    -> IngestionServiceTests
-   |   +-- Parser/       -> PatientCsvParserTests, TreatmentCsvParserTests
-   |   +-- Validation/   -> PatientValidatorTests, TreatmentValidatorTests
-   +-- Integration/
-   |   +-- SQLite/
-   |       +-- DatabaseInitializerTests.cs
-   |       +-- Repositories/  -> SQLitePatientRepositoryTests, SQLiteInvoiceRepositoryTests,
-   |                             SQLiteInvoiceLineItemRepositoryTests, SQLiteTreatmentRepositoryTests
-   +-- Shared/
-      +-- FixedConnectionFactory.cs  -> In-memory SQLite helper for integration tests
+|-- CP.Migrator.UI/
+|   |-- Forms/
+|   |   |-- MainForm.cs / MainForm.Designer.cs
+|   |   |-- IngestionReportForm.cs / IngestionReportForm.Designer.cs
+|   |-- ViewModels/
+|   |   |-- IRowItem.cs
+|   |   |-- PatientRowItem.cs
+|   |   |-- TreatmentRowItem.cs
+|   |-- Program.cs
+|
+|-- CP.Migrator.Application/
+|   |-- Ingestion/
+|   |   |-- IIngestionService.cs
+|   |   |-- IngestionService.cs
+|   |-- Pipeline/
+|   |   |-- IMigratorPipelineService.cs
+|   |   |-- MigratorPipelineService.cs
+|   |-- Startup/
+|   |   |-- IAppStartup.cs
+|   |   |-- AppStartup.cs
+|   |-- ServiceCollectionExtensions.cs
+|
+|-- CP.Migrator.Business/
+|   |-- AutoFix/
+|   |-- Config/
+|   |-- Export/
+|   |-- History/
+|   |-- Parser/
+|   |-- Validation/
+|   |-- ServiceCollectionExtensions.cs
+|
+|-- CP.Migrator.Data/
+|   |-- Entities/
+|   |   |-- Patient.cs
+|   |   |-- Invoice.cs
+|   |   |-- Treatment.cs
+|   |   |-- InvoiceLineItem.cs
+|   |-- Repositories/
+|   |   |-- IRepository.cs
+|   |   |-- IPatientRepository.cs
+|   |   |-- IInvoiceRepository.cs
+|   |   |-- ITreatmentRepository.cs
+|   |   |-- IInvoiceLineItemRepository.cs
+|   |-- IConnectionFactory.cs
+|   |-- IDatabaseInitializer.cs
+|   |-- IUnitOfWork.cs
+|
+|-- CP.Migrator.Data.SQLite/
+|   |-- Repositories/
+|   |   |-- SQLitePatientRepository.cs
+|   |   |-- SQLiteInvoiceRepository.cs
+|   |   |-- SQLiteTreatmentRepository.cs
+|   |   |-- SQLiteInvoiceLineItemRepository.cs
+|   |-- Migrations/
+|   |   |-- 0001_InitialSetup.sql
+|   |   |-- 0002_AddClinicId.sql
+|   |-- SQLiteConnectionFactory.cs
+|   |-- SQLiteUnitOfWork.cs
+|   |-- SQLiteDatabaseInitializer.cs
+|   |-- ServiceCollectionExtensions.cs
+|
+|-- CP.Migrator.Models/
+|   |-- Csv/
+|   |   |-- CsvRow.cs
+|   |   |-- PatientCsvRow.cs
+|   |   |-- TreatmentCsvRow.cs
+|   |-- Extensions/
+|   |   |-- CsvRowExtensions.cs
+|   |-- Results/
+|       |-- ParsedRow.cs
+|       |-- ValidationError.cs
+|       |-- IngestionReport.cs
+|
+`-- CP.Migrator.Test/
+    |-- Business/
+    |   |-- AutoFix/
+    |   |-- Export/
+    |   |-- History/
+    |   |-- Ingestion/
+    |   |-- Parser/
+    |   `-- Validation/
+    |-- Integration/SQLite/
+    |   |-- DatabaseInitializerTests.cs
+    |   `-- Repositories/
+    `-- Shared/
+        `-- FixedConnectionFactory.cs
 ```
 
 ## Getting Started
 
 ### Prerequisites
 
-- Visual Studio 2022+ with the **.NET 10 SDK** installed
-- No external database required - for simplicity, the app creates a local SQLite file (`CorePractice.db`) next to the executable on first run; this can be easily extended in the future to support a custom folder location as well
+- Visual Studio 2022+ with .NET 10 SDK
+- No external DB setup; `CorePractice.db` is created next to the executable on first run (can be easily extended to support specific location as well)
 
-### Running the Application
+### Run the Application
 
-1. Open `cp-data-migrator.slnx` in Visual Studio.
-2. Set **CP.Migrator.UI** as the startup project.
-3. Press **F5** to build and run.
-4. Enter a **Clinic ID** (numeric, >= 1) in the top bar.
-5. Load `patient.csv` and/or `treatment.csv` using the **Load** buttons.
-6. Click **Validate** to check all rows. Rows are color-coded:
-   - Red - has errors (will be skipped on ingestion)
-   - Yellow - has warnings only (will still be ingested)
-   - Blue - auto-fixed
-   - White - fully valid
-7. Optionally click **Auto-Fix** to automatically correct common issues.
-8. Edit individual cells directly in the grid. Use **Undo / Redo** to step through changes.
-9. Use **Export Invalid** to save rows that still have errors to a CSV for external correction.
-10. Click **Ingest** to persist all valid rows. A report dialog will appear with per-row outcomes.
+1. Open `cp-data-migrator.slnx`.
+2. Set `CP.Migrator.UI` as startup project.
+3. Build and run.
+4. Enter a Clinic ID (numeric, >= 1).
+5. Load `patient.csv` and/or `treatment.csv`.
+6. Review validation results (row colors: red errors, yellow warnings, blue auto-fixed, white valid).
+7. Use `Auto-Fix All` and/or edit rows directly. Use Undo/Redo as needed.
+8. Optionally delete selected rows from the active tab.
+9. Optionally export invalid rows from the active tab.
+10. Click `Ingest All` to write valid rows and review the ingestion report dialog.
 
-### Running Tests
-
+### Run Tests
 Tests use xUnit. Run from **Test Explorer** in Visual Studio or via:
 
-```
+```bash
 dotnet test
 ```
 
-Integration tests use an in-memory SQLite database (`FixedConnectionFactory`) - no setup required.
+Integration tests use an in-memory SQLite helper (`FixedConnectionFactory`) - no setup required.
 
 ## CSV File Format
 
@@ -171,17 +204,17 @@ Integration tests use an in-memory SQLite database (`FixedConnectionFactory`) - 
 
 | Column | Description |
 |---|---|
-| Id | Legacy patient ID (stored as `PatientNo`; reference only - not used as DB PK) |
+| Id | Legacy patient ID (stored as `PatientNo`; reference only) |
 | FirstName | Patient first name (required) |
 | LastName | Patient last name (required) |
-| DOB | Date of birth (`yyyy-MM-dd` after auto-fix) |
+| DOB | Date of birth (normalized to `yyyy-MM-dd` by auto-fix where possible) |
 | Gender | `M` / `F` / `O` (auto-fixed to uppercase) |
-| Email | Email address (validated by regex) |
-| MobileNumber | Australian mobile - 10 digits starting with `04` (auto-normalised) |
-| PhoneNumber | Australian landline - 10 digits (auto-normalised) |
+| Email | Email address (regex validated) |
+| MobileNumber | Australian mobile; 10 digits starting with `04` (normalized) |
+| PhoneNumber | Australian phone number (normalized) |
 | Street | Street address |
 | Suburb | Suburb |
-| State | Australian state/territory code: `NSW`, `VIC`, `QLD`, `SA`, `WA`, `TAS`, `NT`, `ACT` |
+| State | Australian state/territory: `NSW`, `VIC`, `QLD`, `SA`, `WA`, `TAS`, `NT`, `ACT` |
 | Postcode | 4-digit Australian postcode |
 
 ### treatment.csv
@@ -194,8 +227,8 @@ Integration tests use an in-memory SQLite database (`FixedConnectionFactory`) - 
 | TreatmentItem | Item code (required) |
 | Description | Treatment description (required) |
 | Price | Price amount (optional) |
-| Fee | Fee amount (required, must be a positive decimal) |
-| Date | Treatment date (`yyyy-MM-dd` after auto-fix) |
+| Fee | Fee amount (required, positive decimal) |
+| Date | Treatment date (normalized to `yyyy-MM-dd` by auto-fix where possible) |
 | Paid | `Yes` / `No` (auto-fixed to title case) |
 | ToothNumber | Tooth number (optional) |
 | Surface | Tooth surface (optional) |

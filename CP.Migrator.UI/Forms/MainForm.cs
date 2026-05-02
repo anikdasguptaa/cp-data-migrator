@@ -1,15 +1,9 @@
 using System.ComponentModel;
-using CP.Migrator.Business.AutoFix;
-using CP.Migrator.Business.Export;
-using CP.Migrator.Business.History;
-using CP.Migrator.Business.Ingestion;
-using CP.Migrator.Business.Parser;
-using CP.Migrator.Business.Validation;
 using CP.Migrator.Models.Csv;
 using CP.Migrator.Models.Results;
-using CP.Migrator.UI.Helpers;
+using CP.Migrator.Application.Pipeline;
 using CP.Migrator.UI.ViewModels;
-using Microsoft.Extensions.DependencyInjection;
+using CP.Migrator.Models.Extensions;
 
 namespace CP.Migrator.UI.Forms;
 
@@ -22,16 +16,7 @@ namespace CP.Migrator.UI.Forms;
 internal partial class MainForm : Form
 {
     // Injected services
-    private readonly ICsvParserService<PatientCsvRow> _patientParser;
-    private readonly ICsvParserService<TreatmentCsvRow> _treatmentParser;
-    private readonly IRecordValidator<PatientCsvRow> _patientValidator;
-    private readonly ICrossRecordValidator<TreatmentCsvRow, PatientCsvRow> _treatmentValidator;
-    private readonly IAutoFixService<PatientCsvRow> _patientAutoFix;
-    private readonly IAutoFixService<TreatmentCsvRow> _treatmentAutoFix;
-    private readonly IRowExportService _exportService;
-    private readonly IUndoRedoManager<PatientCsvRow> _patientUndoRedo;
-    private readonly IUndoRedoManager<TreatmentCsvRow> _treatmentUndoRedo;
-    private readonly IServiceProvider _serviceProvider;
+    private readonly IMigratorPipelineService _pipeline;
 
     // In-memory pipeline state
     private List<ParsedRow<PatientCsvRow>> _patientRows = [];
@@ -47,7 +32,7 @@ internal partial class MainForm : Form
 
     // Pipeline-state flags that drive Validate / AutoFix button availability.
     // _validationDirty: data has changed since the last validation run → Validate should be clickable.
-    // _autoFixReady:    validation has been run on current data → AutoFix is meaningful.
+    // _autoFixReady: validation has been run on current data → AutoFix is meaningful.
     private bool _validationDirty;
     private bool _autoFixReady;
 
@@ -68,41 +53,14 @@ internal partial class MainForm : Form
     // --------------------------------------------------------------------------
     /// <summary>
     /// Initialises the form, builds grid columns, and wires all UI events.
-    /// All business dependencies are resolved by the DI container and injected here;
-    /// the form itself never interacts with service registrations directly.
+    /// All business dependencies are resolved by the DI container and exposed
+    /// through <see cref="IMigratorPipelineService"/>; this class only handles
+    /// UI concerns (data-binding, button state, row colouring, dialogs).
     /// </summary>
-    /// <param name="patientParser">Parses patient CSV files into <see cref="PatientCsvRow"/> records.</param>
-    /// <param name="treatmentParser">Parses treatment CSV files into <see cref="TreatmentCsvRow"/> records.</param>
-    /// <param name="patientValidator">Validates individual patient rows against schema rules.</param>
-    /// <param name="treatmentValidator">Cross-validates treatment rows against the loaded patient set.</param>
-    /// <param name="patientAutoFix">Applies automatic corrections to patient rows (trim, format normalisation, etc.).</param>
-    /// <param name="treatmentAutoFix">Applies automatic corrections to treatment rows.</param>
-    /// <param name="exportService">Writes invalid rows to a CSV file for external correction.</param>
-    /// <param name="patientUndoRedo">Tracks patient row edit and auto-fix history for undo/redo.</param>
-    /// <param name="treatmentUndoRedo">Tracks treatment row edit and auto-fix history for undo/redo.</param>
-    /// <param name="serviceProvider">Root service provider used to create a scoped <see cref="IIngestionService"/> per ingest run.</param>
-    public MainForm(
-        ICsvParserService<PatientCsvRow> patientParser,
-        ICsvParserService<TreatmentCsvRow> treatmentParser,
-        IRecordValidator<PatientCsvRow> patientValidator,
-        ICrossRecordValidator<TreatmentCsvRow, PatientCsvRow> treatmentValidator,
-        IAutoFixService<PatientCsvRow> patientAutoFix,
-        IAutoFixService<TreatmentCsvRow> treatmentAutoFix,
-        IRowExportService exportService,
-        IUndoRedoManager<PatientCsvRow> patientUndoRedo,
-        IUndoRedoManager<TreatmentCsvRow> treatmentUndoRedo,
-        IServiceProvider serviceProvider)
+    /// <param name="pipeline">Facade over all pipeline operations: parse, validate, auto-fix, undo/redo, export, and ingest.</param>
+    public MainForm(IMigratorPipelineService pipeline)
     {
-        _patientParser = patientParser;
-        _treatmentParser = treatmentParser;
-        _patientValidator = patientValidator;
-        _treatmentValidator = treatmentValidator;
-        _patientAutoFix = patientAutoFix;
-        _treatmentAutoFix = treatmentAutoFix;
-        _exportService = exportService;
-        _patientUndoRedo = patientUndoRedo;
-        _treatmentUndoRedo = treatmentUndoRedo;
-        _serviceProvider = serviceProvider;
+        _pipeline = pipeline;
 
         InitializeComponent();
         BuildPatientGridColumns();
@@ -253,9 +211,9 @@ internal partial class MainForm : Form
         try
         {
             SetStatus("Loading patient CSV…");
-            _patientRows = _patientParser.Parse(dlg.FileName).ToList();
+            _patientRows = _pipeline.ParsePatients(dlg.FileName).ToList();
             _patientFileLoaded = true;
-            _patientUndoRedo.Clear();
+            _pipeline.ClearPatientHistory();
             RunPatientValidation();
             MarkValidated();
             RefreshPatientGrid();
@@ -279,9 +237,9 @@ internal partial class MainForm : Form
         try
         {
             SetStatus("Loading treatment CSV…");
-            _treatmentRows = _treatmentParser.Parse(dlg.FileName).ToList();
+            _treatmentRows = _pipeline.ParseTreatments(dlg.FileName).ToList();
             _treatmentFileLoaded = true;
-            _treatmentUndoRedo.Clear();
+            _pipeline.ClearTreatmentHistory();
             RunTreatmentValidation();
             MarkValidated();
             RefreshTreatmentGrid();
@@ -307,28 +265,10 @@ internal partial class MainForm : Form
 	}
 
     private void RunPatientValidation()
-    {
-        foreach (var row in _patientRows)
-        {
-            row.Errors.Clear();
-            _patientValidator.Validate(row, _patientRows);
-        }
-    }
+        => _pipeline.ValidatePatients(_patientRows);
 
     private void RunTreatmentValidation()
-    {
-        // A new list reference is intentional: TreatmentValidator caches the patient-ID
-        // HashSet keyed on reference equality of the context list. Passing the same
-        // _patientRows reference after an in-place Remove() would leave the cache stale
-        // and cause deleted patients to still be treated as valid cross-references.
-        // Creating a snapshot here guarantees the cache rebuilds on every validation run.
-        var patientSnapshot = _patientRows.ToList();
-        foreach (var row in _treatmentRows)
-        {
-            row.Errors.Clear();
-            _treatmentValidator.Validate(row, _treatmentRows, patientSnapshot);
-        }
-    }
+        => _pipeline.ValidateTreatments(_treatmentRows, _patientRows);
 
     // --------------------------------------------------------------------------
     //  Auto-Fix
@@ -336,29 +276,8 @@ internal partial class MainForm : Form
 
     private void AutoFixAll()
     {
-        int fixedCount = 0;
-
-        foreach (var row in _patientRows)
-        {
-            var before = row.Row.Clone();
-            if (_patientAutoFix.TryFix(row.Row))
-            {
-                row.IsAutoFixed = true;
-                fixedCount++;
-                _patientUndoRedo.Push(before, row.Row.Clone());
-            }
-        }
-
-        foreach (var row in _treatmentRows)
-        {
-            var before = row.Row.Clone();
-            if (_treatmentAutoFix.TryFix(row.Row))
-            {
-                row.IsAutoFixed = true;
-                fixedCount++;
-                _treatmentUndoRedo.Push(before, row.Row.Clone());
-            }
-        }
+        int fixedCount = _pipeline.AutoFixPatients(_patientRows)
+                       + _pipeline.AutoFixTreatments(_treatmentRows);
 
         RunPatientValidation();
         RunTreatmentValidation();
@@ -384,14 +303,14 @@ internal partial class MainForm : Form
     {
         bool did = false;
 
-        if (_tabControl.SelectedTab == _patientTab && _patientUndoRedo.CanUndo)
+        if (_tabControl.SelectedTab == _patientTab && _pipeline.CanUndoPatient)
         {
-            ApplyPatientSnapshot(_patientUndoRedo.Undo());
+            ApplyPatientSnapshot(_pipeline.UndoPatient());
             did = true;
         }
-        else if (_tabControl.SelectedTab == _treatmentTab && _treatmentUndoRedo.CanUndo)
+        else if (_tabControl.SelectedTab == _treatmentTab && _pipeline.CanUndoTreatment)
         {
-            ApplyTreatmentSnapshot(_treatmentUndoRedo.Undo());
+            ApplyTreatmentSnapshot(_pipeline.UndoTreatment());
             did = true;
         }
 
@@ -402,14 +321,14 @@ internal partial class MainForm : Form
     {
         bool did = false;
 
-        if (_tabControl.SelectedTab == _patientTab && _patientUndoRedo.CanRedo)
+        if (_tabControl.SelectedTab == _patientTab && _pipeline.CanRedoPatient)
         {
-            ApplyPatientSnapshot(_patientUndoRedo.Redo());
+            ApplyPatientSnapshot(_pipeline.RedoPatient());
             did = true;
         }
-        else if (_tabControl.SelectedTab == _treatmentTab && _treatmentUndoRedo.CanRedo)
+        else if (_tabControl.SelectedTab == _treatmentTab && _pipeline.CanRedoTreatment)
         {
-            ApplyTreatmentSnapshot(_treatmentUndoRedo.Redo());
+            ApplyTreatmentSnapshot(_pipeline.RedoTreatment());
             did = true;
         }
 
@@ -423,7 +342,7 @@ internal partial class MainForm : Form
         snapshot.CopyTo(target.Row);
         target.IsAutoFixed = false;
         target.Errors.Clear();
-        _patientValidator.Validate(target, _patientRows);
+        _pipeline.ValidatePatients(_patientRows);
         RunTreatmentValidation();
     }
 
@@ -434,7 +353,7 @@ internal partial class MainForm : Form
         snapshot.CopyTo(target.Row);
         target.IsAutoFixed = false;
         target.Errors.Clear();
-        _treatmentValidator.Validate(target, _treatmentRows, _patientRows);
+        _pipeline.ValidateTreatments(_treatmentRows, _patientRows);
     }
 
     // --------------------------------------------------------------------------
@@ -452,9 +371,9 @@ internal partial class MainForm : Form
         if (_patientEditSnapshot == null) return;
         if (PatientItemAt(e.RowIndex) is PatientRowItem item)
         {
-            _patientUndoRedo.Push(_patientEditSnapshot, item.ParsedRow.Row.Clone());
+            _pipeline.PushPatientEdit(_patientEditSnapshot, item.ParsedRow.Row.Clone());
             item.ParsedRow.Errors.Clear();
-            _patientValidator.Validate(item.ParsedRow, _patientRows);
+            _pipeline.ValidatePatients(_patientRows);
             RunTreatmentValidation();
             MarkDataChanged();
             _patientGrid.InvalidateRow(e.RowIndex);
@@ -480,9 +399,9 @@ internal partial class MainForm : Form
         if (_treatmentEditSnapshot == null) return;
         if (TreatmentItemAt(e.RowIndex) is TreatmentRowItem item)
         {
-            _treatmentUndoRedo.Push(_treatmentEditSnapshot, item.ParsedRow.Row.Clone());
+            _pipeline.PushTreatmentEdit(_treatmentEditSnapshot, item.ParsedRow.Row.Clone());
             item.ParsedRow.Errors.Clear();
-            _treatmentValidator.Validate(item.ParsedRow, _treatmentRows, _patientRows);
+            _pipeline.ValidateTreatments(_treatmentRows, _patientRows);
             MarkDataChanged();
             _treatmentGrid.InvalidateRow(e.RowIndex);
             UpdateTreatmentStats();
@@ -622,9 +541,7 @@ internal partial class MainForm : Form
 
         try
         {
-            using var scope = _serviceProvider.CreateScope();
-            var ingestionSvc = scope.ServiceProvider.GetRequiredService<IIngestionService>();
-            var report = await ingestionSvc.IngestAsync(clinicId, _patientRows, _treatmentRows);
+            var report = await _pipeline.IngestAsync(clinicId, _patientRows, _treatmentRows);
 
             SetStatus($"Ingestion complete — {report.SuccessCount} inserted, " +
                       $"{report.SkippedCount} skipped, {report.ErrorCount} failed.");
@@ -650,8 +567,8 @@ internal partial class MainForm : Form
             RunTreatmentValidation();
 
             // Clear undo history — the ingested rows are gone; snapshots are stale.
-            _patientUndoRedo.Clear();
-            _treatmentUndoRedo.Clear();
+            _pipeline.ClearPatientHistory();
+            _pipeline.ClearTreatmentHistory();
 
             RefreshPatientGrid();
             RefreshTreatmentGrid();
@@ -703,7 +620,7 @@ internal partial class MainForm : Form
             foreach (var row in toRemove)
                 _patientRows.Remove(row);
 
-            _patientUndoRedo.Clear();
+            _pipeline.ClearPatientHistory();
 
             RunTreatmentValidation();
             MarkValidated();
@@ -720,7 +637,7 @@ internal partial class MainForm : Form
             foreach (var row in toRemove)
                 _treatmentRows.Remove(row);
 
-            _treatmentUndoRedo.Clear();
+            _pipeline.ClearTreatmentHistory();
             MarkValidated();
 
             RefreshTreatmentGrid();
@@ -760,8 +677,8 @@ internal partial class MainForm : Form
         try
         {
             int written = isPatient
-                ? _exportService.ExportInvalid(_patientRows, dlg.FileName)
-                : _exportService.ExportInvalid(_treatmentRows, dlg.FileName);
+                ? _pipeline.ExportInvalidPatients(_patientRows, dlg.FileName)
+                : _pipeline.ExportInvalidTreatments(_treatmentRows, dlg.FileName);
 
             SetStatus($"Exported {written} invalid row(s) to \"{Path.GetFileName(dlg.FileName)}\".");
             MessageBox.Show($"Exported {written} invalid row(s) to:\n{dlg.FileName}",
@@ -800,12 +717,12 @@ internal partial class MainForm : Form
         };
 
         _btnUndo.Enabled = isPatientTab
-            ? _patientUndoRedo.CanUndo
-            : _treatmentUndoRedo.CanUndo;
+            ? _pipeline.CanUndoPatient
+            : _pipeline.CanUndoTreatment;
 
         _btnRedo.Enabled = isPatientTab
-            ? _patientUndoRedo.CanRedo
-            : _treatmentUndoRedo.CanRedo;
+            ? _pipeline.CanRedoPatient
+            : _pipeline.CanRedoTreatment;
     }
 
     // --------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+using CP.Migrator.Business.Config;
 using CP.Migrator.Business.Parser;
 
 namespace CP.Migrator.Test.Business.Parser;
@@ -5,7 +6,7 @@ namespace CP.Migrator.Test.Business.Parser;
 public class PatientCsvParserTests : IDisposable
 {
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-    private readonly PatientCsvParser _sut = new();
+    private readonly PatientCsvParser _sut = new(new CsvParserOptions());
 
     public PatientCsvParserTests()
     {

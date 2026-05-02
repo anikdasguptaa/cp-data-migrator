@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\CP.Migrator.Application\CP.Migrator.Application.csproj" />
     <ProjectReference Include="..\CP.Migrator.Business\CP.Migrator.Business.csproj" />
     <ProjectReference Include="..\CP.Migrator.Data\CP.Migrator.Data.csproj" />
     <ProjectReference Include="..\CP.Migrator.Data.SQLite\CP.Migrator.Data.SQLite.csproj" />
